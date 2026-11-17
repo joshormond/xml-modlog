@@ -54,6 +54,8 @@
   .toolbar .title .sep{color:var(--line);font-weight:400;margin:0 6px;}
   .toolbar .title .fname{color:var(--muted);font-weight:400;}
   .toolbar .spacer{flex:1;}
+  .replace-opt{display:inline-flex;align-items:center;gap:6px;color:var(--muted);cursor:pointer;user-select:none;white-space:nowrap;}
+  .replace-opt input{margin:0;accent-color:var(--accent);cursor:pointer;}
   button{
     background:var(--panel2); color:var(--text); border:1px solid var(--line);
     border-radius:7px; padding:7px 13px; font-size:13px; cursor:pointer;
@@ -134,6 +136,7 @@
 <div id="toolbar" class="toolbar hidden">
   <span class="title">FileMaker Mod Log<span id="fileNameLabel" class="hidden"><span class="sep">|</span><span class="fname" id="fileName"></span></span></span>
   <button id="loadBtn">Load a new file</button>
+  <label class="replace-opt"><input type="checkbox" id="replaceChk" checked>Replace current data set</label>
   <input id="search" type="text" placeholder="Search name, user, catalog&hellip;">
   <select id="typeFilter"><option value="">All catalogs</option></select>
   <button id="showHiddenBtn" class="hidden">Show hidden</button>
@@ -358,20 +361,25 @@ var WORKER_SRC =
 
 /* ================= state ================= */
 
-var APP_VERSION="1.7.23";
+var APP_VERSION="1.7.25";
 
 // `w` is the fixed-layout column width; `noTable` columns are export-only (UUID).
+// `multiOnly` columns appear only when rows from more than one file are loaded;
+// Name has no width so it absorbs whatever space is left.
 var COLS=[
+  {key:"file",  label:"FM File", w:"11%", multiOnly:true},
   {key:"type",  label:"Catalog", w:"11%"},
   {key:"id",    label:"ID",        num:true, w:"8%"},
-  {key:"name",  label:"Name",      w:"30%"},
+  {key:"name",  label:"Name"},
   {key:"modifications", label:"Mod Count", num:true, w:"8%"},
   {key:"timestamp",     label:"Mod Time",  date:true, w:"16%"},
   {key:"modifiedBy",    label:"User",    w:"13.5%"},
   {key:"account",       label:"Account", w:"13.5%"},
   {key:"uuid",          label:"UUID",    noTable:true}
 ];
-var TABLE_COLS=COLS.filter(function(c){return !c.noTable;});
+var multiFile=false;
+function exportCols(){ return COLS.filter(function(c){return !c.multiOnly || multiFile;}); }
+function tableCols(){ return exportCols().filter(function(c){return !c.noTable;}); }
 
 var allRecords=[], view=[];
 var sortKey="timestamp", sortDir=-1;
@@ -416,10 +424,12 @@ themeBtn.addEventListener("click",function(){
 
 /* ================= file intake ================= */
 
+var loadMode="replace";
+function chosenMode(){ return $("replaceChk").checked ? "replace" : "add"; }
 $("loadBtn").addEventListener("click",function(){fileInput.click();});
 drop.addEventListener("click",function(){fileInput.click();});
 fileInput.addEventListener("change",function(){
-  enqueue(fileInput.files); fileInput.value="";
+  enqueue(fileInput.files,chosenMode()); fileInput.value="";
 });
 
 // FileMaker's macOS web viewer (WKWebView) decides drop-vs-navigate at the
@@ -458,17 +468,19 @@ function dropFiles(dt){
 window.addEventListener("drop",function(e){
   e.preventDefault(); drop.classList.remove("over");
   var files=dropFiles(e.dataTransfer);
-  if(files.length) enqueue(files);
+  if(files.length) enqueue(files,chosenMode());
 },false);
 
-function enqueue(files){
+function enqueue(files,mode){
   if(!files.length) return;
-  queue=[files[0]];
+  queue=[{file:files[0],mode:mode||"replace"}];
   pumpQueue();
 }
 function pumpQueue(){
   if(parsing || !queue.length) return;
-  loadFile(queue.shift());
+  var item=queue.shift();
+  loadMode=item.mode;
+  loadFile(item.file);
 }
 
 function setStatus(msg,isErr){
@@ -551,15 +563,26 @@ function onParsed(records,info,uploadName){
   }
   for(var i=0;i<records.length;i++){ records[i].file=fmFile; records[i]._id=nextRecId++; }
 
-  allRecords=records;
-  hidden={};
+  if(loadMode==="add"){
+    // re-adding the same FileMaker file replaces its earlier rows
+    allRecords=allRecords.filter(function(r){return r.file!==fmFile;}).concat(records);
+  }else{
+    allRecords=records;
+    hidden={};
+  }
   searchEl.value="";
   typeFilterEl.value="";
 
-  setStatus(allRecords.length.toLocaleString()+" objects loaded from "+fmFile+
+  var files={};
+  allRecords.forEach(function(r){files[r.file]=1;});
+  var fileKeys=Object.keys(files);
+  multiFile=fileKeys.length>1;
+  var fileLabel=multiFile ? fileKeys.length+" files" : fmFile;
+
+  setStatus(allRecords.length.toLocaleString()+" objects loaded from "+fileLabel+
     (info&&info.source?"  ·  FileMaker source "+info.source:""));
 
-  $("fileName").textContent=fmFile;
+  $("fileName").textContent=fileLabel;
   $("fileNameLabel").classList.remove("hidden");
 
   toolbar.classList.remove("hidden");
@@ -588,10 +611,10 @@ function buildTypeFilter(){
 }
 
 function buildHead(){
-  headEl.innerHTML=TABLE_COLS.map(function(c){
+  headEl.innerHTML=tableCols().map(function(c){
     var sorted=c.key===sortKey;
     var arr=sorted ? (sortDir>0?"▲":"▼") : "↕";
-    return "<th data-k='"+c.key+"' class='"+(sorted?"sorted":"")+(c.num?" num":"")+"' style='width:"+c.w+"'>"+
+    return "<th data-k='"+c.key+"' class='"+(sorted?"sorted":"")+(c.num?" num":"")+"'"+(c.w?" style='width:"+c.w+"'":"")+">"+
       esc(c.label)+"<span class='arr'>"+arr+"</span></th>";
   }).join("")+"<th class='actcol'></th>";
   Array.prototype.forEach.call(headEl.querySelectorAll("th[data-k]"),function(th){
@@ -641,11 +664,11 @@ function renderPage(){
   if(page>=pages) page=pages-1;
   if(page<0) page=0;
   var start=page*size, end=Math.min(total,start+size);
-  var rows=new Array(end-start);
+  var rows=new Array(end-start), cols=tableCols();
   for(var i=start;i<end;i++){
     var r=view[i], cells="";
-    for(var ci=0;ci<TABLE_COLS.length;ci++){
-      var c=TABLE_COLS[ci];
+    for(var ci=0;ci<cols.length;ci++){
+      var c=cols[ci];
       if(c.key==="type") cells+="<td><span class='badge'>"+esc(r.type)+"</span></td>";
       else if(c.key==="modifications") cells+="<td class='num'>"+(r.modifications===""?"":r.modifications.toLocaleString())+"</td>";
       else if(c.key==="timestamp") cells+="<td class='tscol'>"+esc(fmtDate(r.timestamp))+"</td>";
@@ -696,9 +719,10 @@ $("showHiddenBtn").addEventListener("click",function(){
 
 $("csvBtn").addEventListener("click",function(){
   if(!view.length) return;
-  var lines=[COLS.map(function(c){return csvCell(c.label);}).join(",")];
+  var cols=exportCols();
+  var lines=[cols.map(function(c){return csvCell(c.label);}).join(",")];
   view.forEach(function(r){
-    lines.push(COLS.map(function(c){
+    lines.push(cols.map(function(c){
       var v=r[c.key];
       if(c.key==="timestamp") v=(v||"").replace("T"," ");
       return csvCell(v);
@@ -770,14 +794,15 @@ function buildXlsx(){
       .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g,"")
       .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   }
-  var rowsXml=['<row r="1">'+COLS.map(function(c,ci){
+  var cols=exportCols();
+  var rowsXml=['<row r="1">'+cols.map(function(c,ci){
     return '<c r="'+colLetter(ci)+'1" t="inlineStr"><is><t>'+x(c.label)+"</t></is></c>";
   }).join("")+"</row>"];
 
   for(var i=0;i<view.length;i++){
     var r=view[i], rn=i+2, cells="";
-    for(var ci=0;ci<COLS.length;ci++){
-      var c=COLS[ci], ref=colLetter(ci)+rn, v=r[c.key];
+    for(var ci=0;ci<cols.length;ci++){
+      var c=cols[ci], ref=colLetter(ci)+rn, v=r[c.key];
       if(c.key==="modifications" && v!==""){
         cells+='<c r="'+ref+'"><v>'+(Number(v)||0)+"</v></c>";
       }else if(c.key==="id" && v!=="" && /^\d+$/.test(String(v))){
