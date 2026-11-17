@@ -154,7 +154,7 @@
     <h1>FileMaker Mod Log<span class="ver"></span></h1>
     <div>Drop a FileMaker <strong>Save a Copy as XML</strong> file here, or click to choose</div>
     <div class="hint">Reads modification counts &amp; timestamps for every schema object.
-      Parsing happens locally &mdash; nothing is uploaded. Multiple files can be loaded.</div>
+      Parsing happens locally &mdash; nothing is uploaded.</div>
   </div>
   <div id="tablewrap" class="tablewrap hidden">
     <table>
@@ -178,7 +178,7 @@
   <button id="last" title="Last page">&gt;&#124;</button>
 </div>
 
-<input id="file" type="file" accept=".xml,text/xml,application/xml" multiple class="hidden">
+<input id="file" type="file" accept=".xml,text/xml,application/xml" class="hidden">
 
 <script>
 "use strict";
@@ -358,7 +358,7 @@ var WORKER_SRC =
 
 /* ================= state ================= */
 
-var APP_VERSION="1.7.22";
+var APP_VERSION="1.7.23";
 
 // `w` is the fixed-layout column width; `noTable` columns are export-only (UUID).
 var COLS=[
@@ -462,7 +462,8 @@ window.addEventListener("drop",function(e){
 },false);
 
 function enqueue(files){
-  for(var i=0;i<files.length;i++) queue.push(files[i]);
+  if(!files.length) return;
+  queue=[files[0]];
   pumpQueue();
 }
 function pumpQueue(){
@@ -550,20 +551,16 @@ function onParsed(records,info,uploadName){
   }
   for(var i=0;i<records.length;i++){ records[i].file=fmFile; records[i]._id=nextRecId++; }
 
-  // replace any previously loaded copy of the same file, then append
-  allRecords=allRecords.filter(function(r){return r.file!==fmFile;}).concat(records);
+  allRecords=records;
+  hidden={};
+  searchEl.value="";
+  typeFilterEl.value="";
 
-  var files={};
-  allRecords.forEach(function(r){files[r.file]=1;});
-  var fileKeys=Object.keys(files), nFiles=fileKeys.length;
-  setStatus(allRecords.length.toLocaleString()+" objects loaded from "+
-    nFiles+" file"+(nFiles===1?"":"s")+
-    (info&&info.source?"  ·  last file FileMaker source "+info.source:""));
+  setStatus(allRecords.length.toLocaleString()+" objects loaded from "+fmFile+
+    (info&&info.source?"  ·  FileMaker source "+info.source:""));
 
-  var label=$("fileNameLabel"), nameEl=$("fileName");
-  if(nFiles===1) nameEl.textContent=fileKeys[0];
-  else nameEl.textContent=nFiles+" files";
-  label.classList.toggle("hidden",nFiles===0);
+  $("fileName").textContent=fmFile;
+  $("fileNameLabel").classList.remove("hidden");
 
   toolbar.classList.remove("hidden");
   drop.classList.add("hidden");
